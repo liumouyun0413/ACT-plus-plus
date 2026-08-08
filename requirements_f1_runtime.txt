@@ -1,0 +1,7 @@
+# Minimal Python dependencies for F1 ACT inference on NVIDIA Thor (aarch64/CUDA 13).
+# torch and torchvision are installed from ../cu130 by deploy_f1_env.sh.
+numpy==2.5.1
+opencv-python-headless==5.0.0.93
+pillow==12.3.0
+ipython==9.16.1
+PyYAML==6.0.3

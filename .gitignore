@@ -145,3 +145,23 @@ ckpts/
 *.png
 *.npy
 play.ipynb
+
+# Local robotics datasets and generated audit/visualization artifacts
+act_dataset/
+fold_clothes/
+mcap_audit_881/
+remote_original_color_check/
+vis_videos_0416/
+*.mcap
+*.hdf5
+*.mp4
+check_h5_result.txt
+dataset_consistency_report*.json
+dataset_consistency_report*.txt
+episodes_fixable*.json
+episodes_to_drop*.txt
+joint_table_episode*.csv
+
+# Local reference documents and backup copies
+*.pdf
+* copy*.py

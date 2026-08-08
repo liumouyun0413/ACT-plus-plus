@@ -60,10 +60,8 @@ class EpisodicDataset(torch.utils.data.Dataset):
                     base_action = root['/base_action'][()]
                     base_action = preprocess_base_action(base_action)
                     action = np.concatenate([root['/action'][()], base_action], axis=-1)
-                else:  
+                else:
                     action = root['/action'][()]
-                    dummy_base_action = np.zeros([action.shape[0], 2])
-                    action = np.concatenate([action, dummy_base_action], axis=-1)
                 original_action_shape = action.shape
                 episode_len = original_action_shape[0]
                 # get observation at start_ts only
@@ -77,7 +75,14 @@ class EpisodicDataset(torch.utils.data.Dataset):
                     for cam_name in image_dict.keys():
                         decompressed_image = cv2.imdecode(image_dict[cam_name], 1)
                         image_dict[cam_name] = np.array(decompressed_image)
-                
+
+                # resize all camera images to uniform size (cameras may differ)
+                target_h, target_w = 480, 640
+                for cam_name in image_dict.keys():
+                    img = image_dict[cam_name]
+                    if img.shape[0] != target_h or img.shape[1] != target_w:
+                        image_dict[cam_name] = cv2.resize(img, (target_w, target_h))
+
                 # get all actions after and including start_ts
                 if is_sim:
                     action = action[start_ts:]
@@ -162,8 +167,6 @@ def get_norm_stats(dataset_path_list):
                     action = np.concatenate([root['/action'][()], base_action], axis=-1)
                 else:
                     action = root['/action'][()]
-                    dummy_base_action = np.zeros([action.shape[0], 2])
-                    action = np.concatenate([action, dummy_base_action], axis=-1)
         except Exception as e:
             print(f'Error loading {dataset_path} in get_norm_stats')
             print(e)

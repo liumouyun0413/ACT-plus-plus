@@ -3,14 +3,14 @@ from torch.nn import functional as F
 import torchvision.transforms as transforms
 import torch
 import numpy as np
-from detr.main import build_ACT_model_and_optimizer, build_CNNMLP_model_and_optimizer
+from detr.initmain import build_ACT_model_and_optimizer, build_CNNMLP_model_and_optimizer
 import IPython
 e = IPython.embed
 
 from collections import OrderedDict
 from robomimic.models.base_nets import ResNet18Conv, SpatialSoftmax
-from robomimic.algo.diffusion_policy import replace_bn_with_gn, ConditionalUnet1D
-
+from robomimic.algo.diffusion_policy import replace_bn_with_gn
+from robomimic.models.diffusion_policy_nets import ConditionalUnet1D
 
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler

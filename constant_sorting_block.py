@@ -55,6 +55,25 @@ SIM_TASK_CONFIGS = {
 
 }
 
+### Real robot task configs
+REAL_TASK_CONFIGS = {
+    # 积木分拣任务，合并两批数据: 0415(294条) + 0416(350条) = 644条
+    # 数据频率: ~4.3 Hz (stride=7 从30Hz降采样)
+    # 0415帧数: min=121, max=213, mean=160, P95=191
+    # 0416帧数: min=127, max=174, mean=142, P95=155
+    # episode_len 取两批P95较大值=191
+    # 建议 chunk_size=20（覆盖约4.7s动作）
+    'sorting_blocks': {
+        'dataset_dir': [
+            '/home/liumouyun/extended_storage/liumouyun/Datas/record_sorting_blocks_20260415/act_dataset',
+            '/home/liumouyun/extended_storage/liumouyun/Datas/record_sorting_blocks_20260416/act_dataset',
+        ],
+        'num_episodes': 644,
+        'episode_len': 191,
+        'camera_names': ['hand_left_color', 'hand_right_color', 'head_color'],
+    },
+}
+
 ### Simulation envs fixed constants
 DT = 0.02
 FPS = 50

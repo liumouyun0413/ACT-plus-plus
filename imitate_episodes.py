@@ -56,8 +56,8 @@ def main(args):
         from constants import SIM_TASK_CONFIGS
         task_config = SIM_TASK_CONFIGS[task_name]
     else:
-        from aloha_scripts.constants import TASK_CONFIGS
-        task_config = TASK_CONFIGS[task_name]
+        from constants import REAL_TASK_CONFIGS
+        task_config = REAL_TASK_CONFIGS[task_name]
     dataset_dir = task_config['dataset_dir']
     # num_episodes = task_config['num_episodes']
     episode_len = task_config['episode_len']
@@ -68,7 +68,7 @@ def main(args):
     name_filter = task_config.get('name_filter', lambda n: True)
 
     # fixed parameters
-    state_dim = 14
+    state_dim = 16
     lr_backbone = 1e-5
     backbone = 'resnet18'
     if policy_class == 'ACT':
@@ -145,7 +145,7 @@ def main(args):
     config_path = os.path.join(ckpt_dir, 'config.pkl')
     expr_name = ckpt_dir.split('/')[-1]
     if not is_eval:
-        wandb.init(project="mobile-aloha2", reinit=True, entity="mobile-aloha2", name=expr_name)
+        wandb.init(project="G2_aloha", reinit=True, entity="liumouyun0413-usst", name=expr_name)
         wandb.config.update(config)
     with open(config_path, 'wb') as f:
         pickle.dump(config, f)
