@@ -148,7 +148,6 @@ play.ipynb
 
 # Local robotics datasets and generated audit/visualization artifacts
 act_dataset/
-fold_clothes/
 mcap_audit_881/
 remote_original_color_check/
 vis_videos_0416/
