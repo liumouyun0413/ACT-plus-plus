@@ -8,7 +8,10 @@ from copy import deepcopy
 from itertools import repeat
 from tqdm import tqdm
 from einops import rearrange
-import wandb
+try:
+    import wandb
+except ImportError:
+    wandb = None
 import time
 from torchvision import transforms
 
@@ -65,6 +68,8 @@ def main(args):
     stats_dir = task_config.get('stats_dir', None)
     sample_weights = task_config.get('sample_weights', None)
     train_ratio = task_config.get('train_ratio', 0.99)
+    split_manifest_path = task_config.get('split_manifest_path', None)
+    split_seed = task_config.get('split_seed', 1)
     name_filter = task_config.get('name_filter', lambda n: True)
 
     # fixed parameters
@@ -144,7 +149,8 @@ def main(args):
         os.makedirs(ckpt_dir)
     config_path = os.path.join(ckpt_dir, 'config.pkl')
     expr_name = ckpt_dir.split('/')[-1]
-    if not is_eval:
+    use_wandb = args['wandb'] and wandb is not None
+    if not is_eval and use_wandb:
         wandb.init(project="G2_aloha", reinit=True, entity="liumouyun0413-usst", name=expr_name)
         wandb.config.update(config)
     with open(config_path, 'wb') as f:
@@ -162,13 +168,14 @@ def main(args):
         print()
         exit()
 
-    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, name_filter, camera_names, batch_size_train, batch_size_val, args['chunk_size'], args['skip_mirrored_data'], config['load_pretrain'], policy_class, stats_dir_l=stats_dir, sample_weights=sample_weights, train_ratio=train_ratio)
+    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, name_filter, camera_names, batch_size_train, batch_size_val, args['chunk_size'], args['skip_mirrored_data'], config['load_pretrain'], policy_class, stats_dir_l=stats_dir, sample_weights=sample_weights, train_ratio=train_ratio, split_manifest_path=split_manifest_path, split_seed=split_seed)
 
     # save dataset stats
     stats_path = os.path.join(ckpt_dir, f'dataset_stats.pkl')
     with open(stats_path, 'wb') as f:
         pickle.dump(stats, f)
 
+    config['use_wandb'] = use_wandb
     best_ckpt_info = train_bc(train_dataloader, val_dataloader, config)
     best_step, min_val_loss, best_state_dict = best_ckpt_info
 
@@ -176,7 +183,8 @@ def main(args):
     ckpt_path = os.path.join(ckpt_dir, f'policy_best.ckpt')
     torch.save(best_state_dict, ckpt_path)
     print(f'Best ckpt, val loss {min_val_loss:.6f} @ step{best_step}')
-    wandb.finish()
+    if use_wandb:
+        wandb.finish()
 
 
 def make_policy(policy_class, policy_config):
@@ -580,7 +588,8 @@ def train_bc(train_dataloader, val_dataloader, config):
                     best_ckpt_info = (step, min_val_loss, deepcopy(policy.serialize()))
             for k in list(validation_summary.keys()):
                 validation_summary[f'val_{k}'] = validation_summary.pop(k)            
-            wandb.log(validation_summary, step=step)
+            if config['use_wandb']:
+                wandb.log(validation_summary, step=step)
             print(f'Val loss:   {epoch_val_loss:.5f}')
             summary_string = ''
             for k, v in validation_summary.items():
@@ -594,7 +603,8 @@ def train_bc(train_dataloader, val_dataloader, config):
             ckpt_path = os.path.join(ckpt_dir, ckpt_name)
             torch.save(policy.serialize(), ckpt_path)
             success, _ = eval_bc(config, ckpt_name, save_episode=True, num_rollouts=10)
-            wandb.log({'success': success}, step=step)
+            if config['use_wandb']:
+                wandb.log({'success': success}, step=step)
 
         # training
         policy.train()
@@ -605,7 +615,8 @@ def train_bc(train_dataloader, val_dataloader, config):
         loss = forward_dict['loss']
         loss.backward()
         optimizer.step()
-        wandb.log(forward_dict, step=step) # not great, make training 1-2% slower
+        if config['use_wandb']:
+            wandb.log(forward_dict, step=step)
 
         if step % save_every == 0:
             ckpt_path = os.path.join(ckpt_dir, f'policy_step_{step}_seed_{seed}.ckpt')
@@ -642,6 +653,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_steps', action='store', type=int, help='num_steps', required=True)
     parser.add_argument('--lr', action='store', type=float, help='lr', required=True)
     parser.add_argument('--load_pretrain', action='store_true', default=False)
+    parser.add_argument('--wandb', action='store_true', help='enable Weights & Biases logging')
     parser.add_argument('--eval_every', action='store', type=int, default=500, help='eval_every', required=False)
     parser.add_argument('--validate_every', action='store', type=int, default=500, help='validate_every', required=False)
     parser.add_argument('--save_every', action='store', type=int, default=500, help='save_every', required=False)

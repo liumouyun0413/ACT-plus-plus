@@ -5,6 +5,7 @@ import h5py
 import pickle
 import fnmatch
 import cv2
+import json
 from time import time
 from torch.utils.data import TensorDataset, DataLoader
 import torchvision.transforms as transforms
@@ -74,7 +75,9 @@ class EpisodicDataset(torch.utils.data.Dataset):
                 if compressed:
                     for cam_name in image_dict.keys():
                         decompressed_image = cv2.imdecode(image_dict[cam_name], 1)
-                        image_dict[cam_name] = np.array(decompressed_image)
+                        if decompressed_image is None:
+                            raise ValueError(f'JPEG decode failed: {cam_name} at {start_ts}')
+                        image_dict[cam_name] = cv2.cvtColor(decompressed_image, cv2.COLOR_BGR2RGB)
 
                 # resize all camera images to uniform size (cameras may differ)
                 target_h, target_w = 480, 640
@@ -84,12 +87,8 @@ class EpisodicDataset(torch.utils.data.Dataset):
                         image_dict[cam_name] = cv2.resize(img, (target_w, target_h))
 
                 # get all actions after and including start_ts
-                if is_sim:
-                    action = action[start_ts:]
-                    action_len = episode_len - start_ts
-                else:
-                    action = action[max(0, start_ts - 1):] # hack, to make timesteps more aligned
-                    action_len = episode_len - max(0, start_ts - 1) # hack, to make timesteps more aligned
+                action = action[start_ts:]
+                action_len = episode_len - start_ts
 
             # self.is_sim = is_sim
             padded_action = np.zeros((self.max_episode_len, original_action_shape[1]), dtype=np.float32)
@@ -206,6 +205,7 @@ def find_all_hdf5(dataset_dir, skip_mirrored_data):
             if skip_mirrored_data and 'mirror' in filename:
                 continue
             hdf5_files.append(os.path.join(root, filename))
+            hdf5_files.sort()
     print(f'Found {len(hdf5_files)} hdf5 files')
     return hdf5_files
 
@@ -220,7 +220,7 @@ def BatchSampler(batch_size, episode_len_l, sample_weights):
             batch.append(step_idx)
         yield batch
 
-def load_data(dataset_dir_l, name_filter, camera_names, batch_size_train, batch_size_val, chunk_size, skip_mirrored_data=False, load_pretrain=False, policy_class=None, stats_dir_l=None, sample_weights=None, train_ratio=0.99):
+def load_data(dataset_dir_l, name_filter, camera_names, batch_size_train, batch_size_val, chunk_size, skip_mirrored_data=False, load_pretrain=False, policy_class=None, stats_dir_l=None, sample_weights=None, train_ratio=0.99, split_manifest_path=None, split_seed=1):
     if type(dataset_dir_l) == str:
         dataset_dir_l = [dataset_dir_l]
     dataset_path_list_list = [find_all_hdf5(dataset_dir, skip_mirrored_data) for dataset_dir in dataset_dir_l]
@@ -231,9 +231,33 @@ def load_data(dataset_dir_l, name_filter, camera_names, batch_size_train, batch_
     num_episodes_cumsum = np.cumsum(num_episodes_l)
 
     # obtain train test split on dataset_dir_l[0]
-    shuffled_episode_ids_0 = np.random.permutation(num_episodes_0)
-    train_episode_ids_0 = shuffled_episode_ids_0[:int(train_ratio * num_episodes_0)]
-    val_episode_ids_0 = shuffled_episode_ids_0[int(train_ratio * num_episodes_0):]
+    if split_manifest_path is not None and os.path.exists(split_manifest_path):
+        with open(split_manifest_path) as stream:
+            split = json.load(stream)
+        expected_paths = [os.path.abspath(path) for path in dataset_path_list_list[0]]
+        if split['dataset_paths'] != expected_paths:
+            raise RuntimeError(f'Saved split does not match current dataset: {split_manifest_path}')
+        train_episode_ids_0 = np.asarray(split['train_episode_ids'], dtype=np.int64)
+        val_episode_ids_0 = np.asarray(split['val_episode_ids'], dtype=np.int64)
+        print(f'Loaded fixed split: {split_manifest_path}')
+    else:
+        rng = np.random.default_rng(split_seed)
+        shuffled_episode_ids_0 = rng.permutation(num_episodes_0)
+        split_index = int(train_ratio * num_episodes_0)
+        train_episode_ids_0 = shuffled_episode_ids_0[:split_index]
+        val_episode_ids_0 = shuffled_episode_ids_0[split_index:]
+        if split_manifest_path is not None:
+            os.makedirs(os.path.dirname(split_manifest_path), exist_ok=True)
+            split = {
+                'split_seed': split_seed,
+                'train_ratio': train_ratio,
+                'dataset_paths': [os.path.abspath(path) for path in dataset_path_list_list[0]],
+                'train_episode_ids': train_episode_ids_0.tolist(),
+                'val_episode_ids': val_episode_ids_0.tolist(),
+            }
+            with open(split_manifest_path, 'w') as stream:
+                json.dump(split, stream, indent=2)
+            print(f'Saved fixed split: {split_manifest_path}')
     train_episode_ids_l = [train_episode_ids_0] + [np.arange(num_episodes) + num_episodes_cumsum[idx] for idx, num_episodes in enumerate(num_episodes_l[1:])]
     val_episode_ids_l = [val_episode_ids_0]
     train_episode_ids = np.concatenate(train_episode_ids_l)
@@ -254,8 +278,12 @@ def load_data(dataset_dir_l, name_filter, camera_names, batch_size_train, batch_
         stats_dir_l = dataset_dir_l
     elif type(stats_dir_l) == str:
         stats_dir_l = [stats_dir_l]
-    norm_stats, _ = get_norm_stats(flatten_list([find_all_hdf5(stats_dir, skip_mirrored_data) for stats_dir in stats_dir_l]))
-    print(f'Norm stats from: {stats_dir_l}')
+    if stats_dir_l == dataset_dir_l:
+        norm_stats, _ = get_norm_stats([dataset_path_list[i] for i in train_episode_ids])
+        print('Norm stats from training split only')
+    else:
+        norm_stats, _ = get_norm_stats(flatten_list([find_all_hdf5(stats_dir, skip_mirrored_data) for stats_dir in stats_dir_l]))
+        print(f'Norm stats from: {stats_dir_l}')
 
     batch_sampler_train = BatchSampler(batch_size_train, train_episode_len_l, sample_weights)
     batch_sampler_val = BatchSampler(batch_size_val, val_episode_len_l, None)

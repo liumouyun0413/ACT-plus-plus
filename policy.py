@@ -8,18 +8,17 @@ import IPython
 e = IPython.embed
 
 from collections import OrderedDict
-from robomimic.models.base_nets import ResNet18Conv, SpatialSoftmax
-from robomimic.algo.diffusion_policy import replace_bn_with_gn
-from robomimic.models.diffusion_policy_nets import ConditionalUnet1D
-
-from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
-from diffusers.schedulers.scheduling_ddim import DDIMScheduler
-from diffusers.training_utils import EMAModel
 
 
 class DiffusionPolicy(nn.Module):
     def __init__(self, args_override):
         super().__init__()
+
+        from robomimic.models.base_nets import ResNet18Conv, SpatialSoftmax
+        from robomimic.algo.diffusion_policy import replace_bn_with_gn
+        from robomimic.models.diffusion_policy_nets import ConditionalUnet1D
+        from diffusers.schedulers.scheduling_ddim import DDIMScheduler
+        from diffusers.training_utils import EMAModel
 
         self.camera_names = args_override['camera_names']
 

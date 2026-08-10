@@ -85,7 +85,10 @@ def get_args_parser():
 
 def build_ACT_model_and_optimizer(args_override):
     parser = argparse.ArgumentParser('DETR training and evaluation script', parents=[get_args_parser()])
-    args = parser.parse_args()
+    args = parser.parse_args([
+        '--ckpt_dir', '.', '--policy_class', 'ACT', '--task_name', 'build',
+        '--seed', '0', '--num_steps', '0',
+    ])
 
     for k, v in args_override.items():
         setattr(args, k, v)
@@ -108,7 +111,10 @@ def build_ACT_model_and_optimizer(args_override):
 
 def build_CNNMLP_model_and_optimizer(args_override):
     parser = argparse.ArgumentParser('DETR training and evaluation script', parents=[get_args_parser()])
-    args = parser.parse_args()
+    args = parser.parse_args([
+        '--ckpt_dir', '.', '--policy_class', 'CNNMLP', '--task_name', 'build',
+        '--seed', '0', '--num_steps', '0',
+    ])
 
     for k, v in args_override.items():
         setattr(args, k, v)

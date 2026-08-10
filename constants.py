@@ -74,6 +74,17 @@ SIM_TASK_CONFIGS = {
 
 ### Real robot task configs
 REAL_TASK_CONFIGS = {
+    # F1 folding baseline: 86 complete READY trajectories synchronized by MCAP log_time.
+    'f1_ready_86': {
+        'dataset_dir': f'{DATA_ROOT}/f1_ready_86_act',
+        'num_episodes': 86,
+        'episode_len': 2400,
+        'camera_names': ['hand_left_color', 'hand_right_color', 'head_color'],
+        'train_ratio': 0.9,
+        'split_manifest_path': f'{DATA_ROOT}/f1_ready_86_act/train_val_split.json',
+        'split_seed': 20260810,
+    },
+
     # 积木分拣任务，合并两批数据: 0415(294条) + 0416(350条) = 644条
     # 数据频率: ~4.3 Hz (stride=7 从30Hz降采样)
     # 0415帧数: min=121, max=213, mean=160, P95=191
