@@ -1,0 +1,351 @@
+# F1 MCAP 丢帧与 ACT++ HDF5 转换条件审核
+
+- 实际审核 episode：**402**
+- 真实丢帧依据：MCAP `log_time` 相邻间隔 > 1.5×该主题中位周期
+- 严重断流：任一必需主题相邻间隔 > 200 ms
+- 对齐可行性：以 `/hal/joint_states` 为时间轴，全部必需流在 ±50 ms 内可找到样本
+- `READY`：整条可转换；`FRAGMENT_ONLY`：应按严重断流切片后转换；`REJECT`：存在硬错误或对齐覆盖不足
+
+## 分类汇总
+
+| 数据集 | READY | FRAGMENT_ONLY | REJECT | 合计 |
+|---|---:|---:|---:|---:|
+| f1-5-201 | 33 | 166 | 2 | 201 |
+| f1-6-201 | 53 | 148 | 0 | 201 |
+| **总计** | **86** | **314** | **2** | **402** |
+
+## 丢帧汇总
+
+- 丢帧事件：**65070**
+- 估算缺失消息：**77178**（跨所有9个必需流，不能等同于缺失ACT时间步）
+- 含 >200 ms 严重断流的episode：**314**
+- 含header时钟异常的episode：**390**
+- 9路共同连续且≥5秒的可训练片段：**839**
+- 可保留连续时长：**6.525小时 / 6.777小时**
+
+## 转换要求
+
+1. 必须按MCAP `log_time`同步，不能直接按消息序号或异常的相机header时间对齐。
+2. 建议以 `/hal/joint_states` 约30 Hz建立时间轴，三相机和action/state流做最近邻或保持采样。
+3. `qpos`：HAL前14关节（度转弧度）+左右夹爪状态；`action`：lead 14关节（度转弧度）+左右夹爪命令。
+4. 三相机映射为 `head_color`、`hand_left_color`、`hand_right_color`，解码后BGR转RGB并统一尺寸。
+5. `FRAGMENT_ONLY`不能跨断流拼成一条轨迹，应切成独立连续HDF5；`REJECT`需查看CSV的errors字段。
+
+## 需重点检查的episode
+
+- `f1-5-201/episode_000126` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 230 dropped-frame events, about 293 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000143` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 196 dropped-frame events, about 251 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000120` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 201 dropped-frame events, about 285 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000017` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 249 dropped-frame events, about 287 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000084` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 173 dropped-frame events, about 228 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000101` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 200 dropped-frame events, about 255 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000009` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 104 dropped-frame events, about 149 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000020` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 107 dropped-frame events, about 151 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000057` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 142 dropped-frame events, about 182 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000131` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 159 dropped-frame events, about 227 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000002` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 103 dropped-frame events, about 137 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000005` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 124 dropped-frame events, about 180 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000025` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 223 dropped-frame events, about 258 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000041` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 161 dropped-frame events, about 200 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000050` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 192 dropped-frame events, about 249 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000070` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 173 dropped-frame events, about 215 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000075` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 242 dropped-frame events, about 298 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000089` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 182 dropped-frame events, about 235 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000105` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 190 dropped-frame events, about 238 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000116` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 122 dropped-frame events, about 167 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000117` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 178 dropped-frame events, about 234 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000145` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 138 dropped-frame events, about 168 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-5-201/episode_000184` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 188 dropped-frame events, about 226 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-5-201/episode_000199` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 130 dropped-frame events, about 170 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000012` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 162 dropped-frame events, about 212 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000023` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 152 dropped-frame events, about 204 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000028` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 143 dropped-frame events, about 181 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000044` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 125 dropped-frame events, about 185 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000047` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 147 dropped-frame events, about 184 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000050` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 144 dropped-frame events, about 173 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000082` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 184 dropped-frame events, about 227 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000123` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 198 dropped-frame events, about 258 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000127` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 184 dropped-frame events, about 226 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000132` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 154 dropped-frame events, about 193 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000160` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 186 dropped-frame events, about 222 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000161` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 168 dropped-frame events, about 217 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-6-201/episode_000173` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 182 dropped-frame events, about 229 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000176` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 190 dropped-frame events, about 252 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000184` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 161 dropped-frame events, about 203 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000003` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 115 dropped-frame events, about 151 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000014` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 196 dropped-frame events, about 228 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000021` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 244 dropped-frame events, about 295 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000024` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 217 dropped-frame events, about 279 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000027` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 245 dropped-frame events, about 291 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000035` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 218 dropped-frame events, about 244 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000036` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 232 dropped-frame events, about 276 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000039` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 223 dropped-frame events, about 265 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000049` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 209 dropped-frame events, about 253 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000051` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 211 dropped-frame events, about 255 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000055` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 183 dropped-frame events, about 226 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000056` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 175 dropped-frame events, about 220 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-5-201/episode_000060` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 177 dropped-frame events, about 218 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000063` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 160 dropped-frame events, about 207 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000066` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 176 dropped-frame events, about 220 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000067` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 158 dropped-frame events, about 209 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000074` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 238 dropped-frame events, about 285 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-5-201/episode_000077` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 188 dropped-frame events, about 228 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000083` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 172 dropped-frame events, about 215 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000100` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 150 dropped-frame events, about 187 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000129` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 156 dropped-frame events, about 188 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000139` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 176 dropped-frame events, about 208 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000141` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 161 dropped-frame events, about 212 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000156` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 140 dropped-frame events, about 177 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000161` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 135 dropped-frame events, about 177 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000162` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 142 dropped-frame events, about 180 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000175` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 164 dropped-frame events, about 196 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000176` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 217 dropped-frame events, about 263 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000187` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 124 dropped-frame events, about 154 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000188` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 143 dropped-frame events, about 186 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000006` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 157 dropped-frame events, about 195 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-6-201/episode_000015` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 154 dropped-frame events, about 194 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000025` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 148 dropped-frame events, about 206 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000026` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 145 dropped-frame events, about 176 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000029` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 117 dropped-frame events, about 152 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000036` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 164 dropped-frame events, about 203 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-6-201/episode_000041` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 165 dropped-frame events, about 201 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000042` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 124 dropped-frame events, about 176 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000043` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 307 dropped-frame events, about 366 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000048` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 159 dropped-frame events, about 185 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000052` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 118 dropped-frame events, about 160 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000053` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 144 dropped-frame events, about 182 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000054` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 103 dropped-frame events, about 141 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000056` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 164 dropped-frame events, about 200 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-6-201/episode_000059` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 107 dropped-frame events, about 145 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-6-201/episode_000067` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 111 dropped-frame events, about 145 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000071` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 141 dropped-frame events, about 173 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000078` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 143 dropped-frame events, about 187 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000089` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 158 dropped-frame events, about 193 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000095` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 149 dropped-frame events, about 196 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000105` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 185 dropped-frame events, about 232 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000115` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 200 dropped-frame events, about 238 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000134` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 139 dropped-frame events, about 179 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000154` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 174 dropped-frame events, about 212 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000175` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 171 dropped-frame events, about 223 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000193` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 158 dropped-frame events, about 199 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000010` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 151 dropped-frame events, about 177 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000011` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 169 dropped-frame events, about 216 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000015` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 122 dropped-frame events, about 144 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000028` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 177 dropped-frame events, about 212 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000029` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 211 dropped-frame events, about 234 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000030` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 168 dropped-frame events, about 204 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000031` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 206 dropped-frame events, about 226 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000034` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 186 dropped-frame events, about 211 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000037` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 155 dropped-frame events, about 190 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-5-201/episode_000047` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 228 dropped-frame events, about 265 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000048` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 258 dropped-frame events, about 293 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000052` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 198 dropped-frame events, about 225 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000053` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 132 dropped-frame events, about 160 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000054` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 165 dropped-frame events, about 183 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000057` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 197 dropped-frame events, about 225 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000059` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 149 dropped-frame events, about 175 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000061` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 163 dropped-frame events, about 209 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000062` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 203 dropped-frame events, about 239 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000065` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 196 dropped-frame events, about 227 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000071` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 189 dropped-frame events, about 237 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000078` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 176 dropped-frame events, about 212 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000080` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 134 dropped-frame events, about 154 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000088` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 262 dropped-frame events, about 330 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000090` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 156 dropped-frame events, about 198 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000091` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 193 dropped-frame events, about 240 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000093` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 204 dropped-frame events, about 251 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000094` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 176 dropped-frame events, about 209 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000096` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 163 dropped-frame events, about 189 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000097` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 145 dropped-frame events, about 173 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000098` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 209 dropped-frame events, about 242 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000114` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 204 dropped-frame events, about 232 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000115` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 123 dropped-frame events, about 152 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000118` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 139 dropped-frame events, about 163 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000119` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 126 dropped-frame events, about 154 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000128` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 190 dropped-frame events, about 231 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000134` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 180 dropped-frame events, about 201 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000135` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 130 dropped-frame events, about 167 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000136` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 149 dropped-frame events, about 178 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000137` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 150 dropped-frame events, about 197 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000138` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 146 dropped-frame events, about 184 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000140` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 164 dropped-frame events, about 212 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000142` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 181 dropped-frame events, about 220 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000149` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 171 dropped-frame events, about 198 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000150` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 196 dropped-frame events, about 246 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000152` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 134 dropped-frame events, about 161 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000155` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 173 dropped-frame events, about 215 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000158` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 208 dropped-frame events, about 244 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000163` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 129 dropped-frame events, about 164 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000167` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 145 dropped-frame events, about 172 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000170` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 143 dropped-frame events, about 174 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000171` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 154 dropped-frame events, about 183 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000186` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 161 dropped-frame events, about 192 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000191` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 106 dropped-frame events, about 133 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000194` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 154 dropped-frame events, about 194 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000196` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 172 dropped-frame events, about 213 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000197` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 144 dropped-frame events, about 162 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000000` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 144 dropped-frame events, about 171 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000004` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 150 dropped-frame events, about 184 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000007` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 126 dropped-frame events, about 158 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000010` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 117 dropped-frame events, about 173 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000019` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 105 dropped-frame events, about 140 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000021` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 128 dropped-frame events, about 166 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000033` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 137 dropped-frame events, about 164 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000055` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 142 dropped-frame events, about 168 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-6-201/episode_000062` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 133 dropped-frame events, about 162 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000063` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 187 dropped-frame events, about 215 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000064` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 206 dropped-frame events, about 229 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-6-201/episode_000068` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 174 dropped-frame events, about 204 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000072` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 173 dropped-frame events, about 207 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000074` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 128 dropped-frame events, about 160 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000075` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 161 dropped-frame events, about 198 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000080` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 187 dropped-frame events, about 216 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000087` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 185 dropped-frame events, about 216 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000091` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 224 dropped-frame events, about 264 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000096` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 138 dropped-frame events, about 170 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000135` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 154 dropped-frame events, about 185 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000138` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 168 dropped-frame events, about 210 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000139` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 117 dropped-frame events, about 144 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000143` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 138 dropped-frame events, about 163 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000145` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 163 dropped-frame events, about 180 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-6-201/episode_000146` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 139 dropped-frame events, about 167 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000153` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 151 dropped-frame events, about 179 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000158` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 123 dropped-frame events, about 153 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000159` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 156 dropped-frame events, about 185 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000162` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 141 dropped-frame events, about 167 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000165` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 176 dropped-frame events, about 200 missing messages
+- `f1-6-201/episode_000170` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 165 dropped-frame events, about 188 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000171` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 167 dropped-frame events, about 212 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000179` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 182 dropped-frame events, about 201 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000180` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 160 dropped-frame events, about 194 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000190` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 136 dropped-frame events, about 175 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000194` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 146 dropped-frame events, about 160 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000196` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 171 dropped-frame events, about 208 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000197` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 122 dropped-frame events, about 146 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000199` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 108 dropped-frame events, about 148 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000000` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 143 dropped-frame events, about 162 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000001` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 118 dropped-frame events, about 132 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-5-201/episode_000007` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 123 dropped-frame events, about 143 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000009` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 113 dropped-frame events, about 131 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000013` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 140 dropped-frame events, about 157 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000018` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 201 dropped-frame events, about 235 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000022` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 226 dropped-frame events, about 237 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000023` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 196 dropped-frame events, about 223 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000026` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 252 dropped-frame events, about 271 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000038` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 208 dropped-frame events, about 239 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-5-201/episode_000042` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 177 dropped-frame events, about 207 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000043` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 255 dropped-frame events, about 302 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000046` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 171 dropped-frame events, about 189 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-5-201/episode_000058` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 234 dropped-frame events, about 265 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000064` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 189 dropped-frame events, about 223 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000069` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 199 dropped-frame events, about 222 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000072` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 115 dropped-frame events, about 135 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-5-201/episode_000073` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 200 dropped-frame events, about 235 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000076` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 158 dropped-frame events, about 183 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000079` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 192 dropped-frame events, about 243 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000081` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 169 dropped-frame events, about 205 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000082` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 185 dropped-frame events, about 210 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000085` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 166 dropped-frame events, about 208 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000092` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 149 dropped-frame events, about 174 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000099` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 171 dropped-frame events, about 204 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000102` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 261 dropped-frame events, about 292 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000103` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 145 dropped-frame events, about 168 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000104` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 197 dropped-frame events, about 220 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000108` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 205 dropped-frame events, about 249 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000109` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 172 dropped-frame events, about 193 missing messages
+- `f1-5-201/episode_000110` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 179 dropped-frame events, about 210 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000111` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 146 dropped-frame events, about 168 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000113` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 148 dropped-frame events, about 190 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000120` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 125 dropped-frame events, about 153 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000121` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 168 dropped-frame events, about 206 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000123` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 210 dropped-frame events, about 240 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000124` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 113 dropped-frame events, about 144 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000125` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 136 dropped-frame events, about 172 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000132` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 145 dropped-frame events, about 163 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-5-201/episode_000133` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 149 dropped-frame events, about 168 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000148` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 181 dropped-frame events, about 206 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-5-201/episode_000151` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 126 dropped-frame events, about 143 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000154` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 157 dropped-frame events, about 183 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-5-201/episode_000157` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 98 dropped-frame events, about 126 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000160` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 206 dropped-frame events, about 222 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000164` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 225 dropped-frame events, about 237 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000165` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 119 dropped-frame events, about 133 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000166` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 167 dropped-frame events, about 188 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000168` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 124 dropped-frame events, about 154 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-5-201/episode_000169` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 110 dropped-frame events, about 126 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-5-201/episode_000173` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 141 dropped-frame events, about 162 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000174` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 185 dropped-frame events, about 206 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000179` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 150 dropped-frame events, about 173 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-5-201/episode_000180` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 157 dropped-frame events, about 172 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000181` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 183 dropped-frame events, about 219 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000182` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 133 dropped-frame events, about 154 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-5-201/episode_000189` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 180 dropped-frame events, about 201 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000193` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 201 dropped-frame events, about 222 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000195` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 126 dropped-frame events, about 161 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-5-201/episode_000198` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 156 dropped-frame events, about 188 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000200` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 151 dropped-frame events, about 183 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000001` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 134 dropped-frame events, about 154 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000003` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 133 dropped-frame events, about 157 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000005` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 153 dropped-frame events, about 188 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000008` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 127 dropped-frame events, about 154 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000013` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 139 dropped-frame events, about 163 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000016` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 155 dropped-frame events, about 186 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000018` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 158 dropped-frame events, about 182 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000024` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 129 dropped-frame events, about 171 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000027` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 148 dropped-frame events, about 193 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000031` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 146 dropped-frame events, about 166 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000035` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 110 dropped-frame events, about 140 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000037` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 149 dropped-frame events, about 187 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000040` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 113 dropped-frame events, about 148 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000046` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 126 dropped-frame events, about 155 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000049` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 105 dropped-frame events, about 125 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000058` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 177 dropped-frame events, about 205 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000065` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 159 dropped-frame events, about 187 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000066` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 168 dropped-frame events, about 192 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000073` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 180 dropped-frame events, about 205 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000076` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 198 dropped-frame events, about 217 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000081` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 133 dropped-frame events, about 148 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000084` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 136 dropped-frame events, about 153 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-6-201/episode_000085` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 148 dropped-frame events, about 183 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000086` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 190 dropped-frame events, about 215 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000090` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 196 dropped-frame events, about 238 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000093` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 192 dropped-frame events, about 219 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000094` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 189 dropped-frame events, about 216 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000097` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 173 dropped-frame events, about 207 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000098` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 96 dropped-frame events, about 111 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-6-201/episode_000102` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 174 dropped-frame events, about 205 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000104` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 172 dropped-frame events, about 212 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000108` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 139 dropped-frame events, about 179 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000109` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 180 dropped-frame events, about 213 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000110` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 128 dropped-frame events, about 164 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000111` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 158 dropped-frame events, about 174 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000113` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 235 dropped-frame events, about 259 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000114` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 197 dropped-frame events, about 233 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000117` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 251 dropped-frame events, about 285 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000118` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 122 dropped-frame events, about 146 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-6-201/episode_000119` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 91 dropped-frame events, about 109 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000121` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 144 dropped-frame events, about 164 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000122` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 172 dropped-frame events, about 199 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000124` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 198 dropped-frame events, about 220 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000126` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 153 dropped-frame events, about 170 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000137` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 116 dropped-frame events, about 141 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000141` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 152 dropped-frame events, about 172 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000142` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 195 dropped-frame events, about 222 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000144` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 166 dropped-frame events, about 186 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-6-201/episode_000147` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 183 dropped-frame events, about 214 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000148` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 163 dropped-frame events, about 188 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000150` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 130 dropped-frame events, about 151 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000155` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 132 dropped-frame events, about 148 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000157` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 176 dropped-frame events, about 205 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000163` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 105 dropped-frame events, about 123 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000164` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 173 dropped-frame events, about 215 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000172` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 238 dropped-frame events, about 273 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000174` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 108 dropped-frame events, about 133 missing messages; header clock anomaly on 1 topics; convert using MCAP log_time
+- `f1-6-201/episode_000177` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 146 dropped-frame events, about 173 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000181` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 170 dropped-frame events, about 199 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000185` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 157 dropped-frame events, about 184 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000186` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 154 dropped-frame events, about 177 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-6-201/episode_000192` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 159 dropped-frame events, about 187 missing messages; header clock anomaly on 3 topics; convert using MCAP log_time
+- `f1-6-201/episode_000195` — **FRAGMENT_ONLY**：one or more required streams has a gap >200 ms; 129 dropped-frame events, about 149 missing messages; header clock anomaly on 2 topics; convert using MCAP log_time
+- `f1-5-201/episode_000130` — **REJECT**：metadata/file error: metadata.yaml is empty or invalid
+- `f1-5-201/episode_000131` — **REJECT**：metadata/file error: metadata.yaml is empty or invalid

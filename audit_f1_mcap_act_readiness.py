@@ -75,6 +75,38 @@ def percentile(values: list[float], fraction: float) -> float | None:
     return ordered[low] * (high - position) + ordered[high] * (position - low)
 
 
+def continuity_intervals(times: list[float], max_gap_s: float = 0.2) -> list[tuple[float, float]]:
+    if not times:
+        return []
+    intervals = []
+    start = times[0]
+    previous = times[0]
+    for current in times[1:]:
+        if current < previous or current - previous > max_gap_s:
+            intervals.append((start, previous))
+            start = current
+        previous = current
+    intervals.append((start, previous))
+    return intervals
+
+
+def intersect_intervals(
+    left: list[tuple[float, float]], right: list[tuple[float, float]]
+) -> list[tuple[float, float]]:
+    intersections = []
+    i = j = 0
+    while i < len(left) and j < len(right):
+        start = max(left[i][0], right[j][0])
+        end = min(left[i][1], right[j][1])
+        if end > start:
+            intersections.append((start, end))
+        if left[i][1] < right[j][1]:
+            i += 1
+        else:
+            j += 1
+    return intersections
+
+
 def topic_metrics(log_times: list[float], header_times: list[float]) -> dict[str, Any]:
     positive_dt = [b - a for a, b in zip(log_times, log_times[1:]) if b >= a]
     median_dt = statistics.median(positive_dt) if positive_dt else None
@@ -127,7 +159,10 @@ def inspect_episode(dataset: str, episode_dir: Path, alignment_tolerance_s: floa
         return result
 
     try:
-        info = yaml.safe_load(metadata_path.read_text())["rosbag2_bagfile_information"]
+        metadata = yaml.safe_load(metadata_path.read_text())
+        if not isinstance(metadata, dict) or "rosbag2_bagfile_information" not in metadata:
+            raise ValueError("metadata.yaml is empty or invalid")
+        info = metadata["rosbag2_bagfile_information"]
         relative_paths = info.get("relative_file_paths", [])
         if len(relative_paths) != 1:
             raise ValueError(f"expected one MCAP, got {len(relative_paths)}")
@@ -234,6 +269,7 @@ def inspect_episode(dataset: str, episode_dir: Path, alignment_tolerance_s: floa
     overlap_s = 0.0
     alignment_coverage = 0.0
     max_nearest_ms = None
+    usable_segments: list[tuple[float, float]] = []
     if not missing_topics:
         overlap_start = max(log_times[topic][0] for topic in REQUIRED)
         overlap_end = min(log_times[topic][-1] for topic in REQUIRED)
@@ -251,11 +287,29 @@ def inspect_episode(dataset: str, episode_dir: Path, alignment_tolerance_s: floa
             if nearest else 0.0
         )
         max_nearest_ms = max(nearest, default=0.0) * 1000
+        common_intervals = continuity_intervals(log_times[REQUIRED[0]])
+        for topic in REQUIRED[1:]:
+            common_intervals = intersect_intervals(
+                common_intervals, continuity_intervals(log_times[topic])
+            )
+        usable_segments = [
+            (start, end) for start, end in common_intervals if end - start >= 5.0
+        ]
     result["common_overlap_s"] = overlap_s
     result["alignment_coverage_50ms"] = alignment_coverage
     result["max_nearest_ms"] = max_nearest_ms
+    result["usable_segments_ge_5s"] = len(usable_segments)
+    result["usable_continuous_s"] = sum(end - start for start, end in usable_segments)
+    result["longest_continuous_s"] = max(
+        (end - start for start, end in usable_segments), default=0.0
+    )
 
-    hard_failure = bool(result["errors"]) or overlap_s < 5.0 or alignment_coverage < 0.95
+    hard_failure = (
+        bool(result["errors"])
+        or overlap_s < 5.0
+        or alignment_coverage < 0.95
+        or not usable_segments
+    )
     if hard_failure:
         result["classification"] = "REJECT"
     elif total_severe_gaps:
@@ -282,6 +336,7 @@ def write_reports(results: list[dict[str, Any]], output_dir: Path) -> None:
     columns = [
         "dataset", "episode", "classification", "bag_duration_s", "common_overlap_s",
         "alignment_coverage_50ms", "drop_events", "estimated_missing", "severe_gaps",
+        "usable_segments_ge_5s", "usable_continuous_s", "longest_continuous_s",
         "header_clock_topics", "size_bytes", "errors", "warnings", "path",
     ]
     with (output_dir / "mcap_act_readiness.csv").open("w", newline="") as stream:
@@ -324,12 +379,17 @@ def write_reports(results: list[dict[str, Any]], output_dir: Path) -> None:
     total_missing = sum(item.get("estimated_missing", 0) for item in results)
     severe_episodes = sum(item.get("severe_gaps", 0) > 0 for item in results)
     header_episodes = sum(item.get("header_clock_topics", 0) > 0 for item in results)
+    usable_segments = sum(item.get("usable_segments_ge_5s", 0) for item in results)
+    usable_hours = sum(item.get("usable_continuous_s", 0.0) for item in results) / 3600
+    source_hours = sum(item.get("bag_duration_s", 0.0) for item in results) / 3600
     lines += [
         "", "## 丢帧汇总", "",
         f"- 丢帧事件：**{total_events}**",
         f"- 估算缺失消息：**{total_missing}**（跨所有9个必需流，不能等同于缺失ACT时间步）",
         f"- 含 >200 ms 严重断流的episode：**{severe_episodes}**",
         f"- 含header时钟异常的episode：**{header_episodes}**",
+        f"- 9路共同连续且≥5秒的可训练片段：**{usable_segments}**",
+        f"- 可保留连续时长：**{usable_hours:.3f}小时 / {source_hours:.3f}小时**",
         "", "## 转换要求", "",
         "1. 必须按MCAP `log_time`同步，不能直接按消息序号或异常的相机header时间对齐。",
         "2. 建议以 `/hal/joint_states` 约30 Hz建立时间轴，三相机和action/state流做最近邻或保持采样。",
