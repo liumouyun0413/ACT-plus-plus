@@ -113,11 +113,11 @@ def load_policy(ckpt_dir, ckpt_name, policy_config, device):
     return policy
 
 
-def load_stats(ckpt_dir):
+def load_stats(ckpt_dir, device):
     with open(os.path.join(ckpt_dir, 'dataset_stats.pkl'), 'rb') as f:
         stats = pickle.load(f)
     for k in stats:
-        stats[k] = torch.from_numpy(stats[k]).float().cuda()
+        stats[k] = torch.from_numpy(stats[k]).float().to(device)
     return stats
 
 
@@ -298,12 +298,12 @@ class F1RosInterface(Node):
 
 # ── 推理 ──────────────────────────────────────────────────────
 
-def infer_one_chunk(policy, ros_iface, camera_names, stats):
+def infer_one_chunk(policy, ros_iface, camera_names, stats, device):
     """
     获取观测 → 推理 → 反归一化。
     要点2: F1 走 ros2 topic 控制，控制器在无新指令时保持最后位置，
     因此本函数同步执行即可，调用方无需在推理期间持续下发 hold 指令。
-    返回 (chunk_np, timing_dict)
+    返回 (chunk_np, timing_dict)。观测/推理失败时向上抛出异常，由调用方处理。
     """
     timing = {}
 
@@ -317,15 +317,16 @@ def infer_one_chunk(policy, ros_iface, camera_names, stats):
 
     t0 = time.time()
     imgs = np.stack([np.transpose(images[n], (2, 0, 1)) for n in camera_names])
-    img_t = torch.from_numpy(imgs / 255.0).float().cuda().unsqueeze(0)
-    qpos_t = (torch.from_numpy(qpos).float().cuda().unsqueeze(0)
+    img_t = torch.from_numpy(imgs / 255.0).float().to(device).unsqueeze(0)
+    qpos_t = (torch.from_numpy(qpos).float().to(device).unsqueeze(0)
               - stats['qpos_mean']) / stats['qpos_std']
     timing['preprocess_ms'] = (time.time() - t0) * 1000
 
     t0 = time.time()
     with torch.inference_mode():
         a_hat = policy(qpos_t, img_t)
-    torch.cuda.synchronize()
+    if device.type == 'cuda':
+        torch.cuda.synchronize()
     timing['model_ms'] = (time.time() - t0) * 1000
 
     t0 = time.time()
@@ -363,11 +364,12 @@ def main():
 
     print(f"📋 chunk_size={chunk_size}, action_hz={args.action_hz}, "
           f"每chunk执行 {chunk_size - 1} 步（跳过chunk[0]），"
-          f"耗时约 {(chunk_size - 1) * action_dt:.2f}s，推理期间无需hold")
+          f"动作执行耗时约 {(chunk_size - 1) * action_dt:.2f}s（不含推理耗时），"
+          f"推理期间无需hold")
 
     # 加载模型
     policy = load_policy(args.ckpt_dir, args.ckpt_name, policy_config, device)
-    stats = load_stats(args.ckpt_dir)
+    stats = load_stats(args.ckpt_dir, device)
 
     # 初始化 ROS2
     print("🤖 初始化 ROS2...")
@@ -395,8 +397,8 @@ def main():
     print("🔥 GPU预热...")
     img_t = torch.from_numpy(
         np.stack([np.transpose(test_img[n], (2, 0, 1)) for n in camera_names]) / 255.0
-    ).float().cuda().unsqueeze(0)
-    qpos_t = (torch.from_numpy(test_qpos).float().cuda().unsqueeze(0)
+    ).float().to(device).unsqueeze(0)
+    qpos_t = (torch.from_numpy(test_qpos).float().to(device).unsqueeze(0)
               - stats['qpos_mean']) / stats['qpos_std']
     with torch.inference_mode():
         for _ in range(10):
@@ -414,131 +416,128 @@ def main():
 
     # ── chunk数值日志 ───────────────────────────────────────
     log_csv_path = os.path.join(args.ckpt_dir, f"chunk_log_{int(t_start)}.csv")
-    _csv_file = open(log_csv_path, 'w', newline='')
-    _csv_writer = csv.writer(_csv_file)
     arm_cols  = ([f"chunk_arm_start_{k}" for k in range(14)] +
                  [f"chunk_arm_end_{k}" for k in range(14)])
     grip_cols = ["chunk_grip_l_start", "chunk_grip_r_start",
                  "chunk_grip_l_end",   "chunk_grip_r_end"]
     gap_cols  = [f"gap_arm_{k}" for k in range(14)] + ["gap_grip_l", "gap_grip_r"]
-    _csv_writer.writerow(["ci", "t_start_s", "infer_ms",
-                          "exec_steps"] + arm_cols + grip_cols + gap_cols)
-    print(f"  📄 chunk日志写入: {log_csv_path}")
 
     current_chunk = None
     prev_chunk = None  # 用于记录上一个chunk，以计算chunk边界跳变量
 
-    try:
-        for ci in range(args.max_chunks):
+    with open(log_csv_path, 'w', newline='') as _csv_file:
+        _csv_writer = csv.writer(_csv_file)
+        _csv_writer.writerow(["ci", "t_start_s", "infer_ms",
+                              "exec_steps"] + arm_cols + grip_cols + gap_cols)
+        print(f"  📄 chunk日志写入: {log_csv_path}")
 
-            # ── 1. 同步推理 ──────────────────────────────────
-            # 要点2: F1 通过 ros2 topic 通讯，控制器在未收到新指令前保持最后
-            # 一次下发的位置，因此这里直接同步推理，不需要额外线程持续 hold。
-            infer_start = time.time()
-            current_chunk, timing = infer_one_chunk(policy, ros_iface, camera_names, stats)
-            infer_ms = (time.time() - infer_start) * 1000
+        try:
+            for ci in range(args.max_chunks):
 
-            if current_chunk is None:
-                print("  ⚠️ 推理失败，跳过本chunk")
-                continue
+                # ── 1. 同步推理 ──────────────────────────────────
+                # 要点2: F1 通过 ros2 topic 通讯，控制器在未收到新指令前保持最后
+                # 一次下发的位置，因此这里直接同步推理，不需要额外线程持续 hold。
+                infer_start = time.time()
+                current_chunk, timing = infer_one_chunk(
+                    policy, ros_iface, camera_names, stats, device)
+                infer_ms = (time.time() - infer_start) * 1000
 
-            infer_timings.append(timing)
+                infer_timings.append(timing)
 
-            # ── 2. 按30Hz直接执行当前chunk（i=1..n-1，跳过chunk[0]）──
-            # 跳过 chunk[0] 的原因：
-            #   推理期间机器人保持上一条指令值 prev_action，但 get_qpos 读取的是
-            #   实际电机值。受重力/弹性影响，两者存在微小偏差，导致 chunk[0] ≠
-            #   prev_action。从 i=1 直接执行 prev_action→chunk[1]，避免此偏差。
-            # 要点1: 训练数据 action 间隔为30Hz，chunk中相邻元素本身已按30Hz采样，
-            #   因此直接以 action_dt 节拍逐帧下发，不再做100Hz插值。
-            n = len(current_chunk)
-            chunk_steps = 0
+                # ── 2. 按30Hz直接执行当前chunk（i=1..n-1，跳过chunk[0]）──
+                # 跳过 chunk[0] 的原因：
+                #   推理期间机器人保持上一条指令值 prev_action，但 get_qpos 读取的是
+                #   实际电机值。受重力/弹性影响，两者存在微小偏差，导致 chunk[0] ≠
+                #   prev_action。从 i=1 直接执行 prev_action→chunk[1]，避免此偏差。
+                # 要点1: 训练数据 action 间隔为30Hz，chunk中相邻元素本身已按30Hz采样，
+                #   因此直接以 action_dt 节拍逐帧下发，不再做100Hz插值。
+                n = len(current_chunk)
+                chunk_steps = 0
 
-            for i in range(1, n):
-                step_start = time.time()
-                raw_action = current_chunk[i]
-                action = safety_clamp(raw_action, prev_action)
-                ros_iface.send_action(action, send_gripper=True)
-                prev_action = action.copy()
-                chunk_steps += 1
-                total_steps += 1
+                for i in range(1, n):
+                    step_start = time.time()
+                    raw_action = current_chunk[i]
+                    action = safety_clamp(raw_action, prev_action)
+                    ros_iface.send_action(action, send_gripper=True)
+                    prev_action = action.copy()
+                    chunk_steps += 1
+                    total_steps += 1
 
-                elapsed = time.time() - step_start
-                if elapsed < action_dt:
-                    time.sleep(action_dt - elapsed)
+                    elapsed = time.time() - step_start
+                    if elapsed < action_dt:
+                        time.sleep(action_dt - elapsed)
 
-            # ── 3. 日志 ──────────────────────────────────────
-            chunk_arm_start    = current_chunk[0, :14]
-            chunk_arm_end      = current_chunk[-1, :14]
-            chunk_grip_l_start = current_chunk[0, 14]
-            chunk_grip_r_start = current_chunk[0, 15]
-            chunk_grip_l_end   = current_chunk[-1, 14]
-            chunk_grip_r_end   = current_chunk[-1, 15]
+                # ── 3. 日志 ──────────────────────────────────────
+                chunk_arm_start    = current_chunk[0, :14]
+                chunk_arm_end      = current_chunk[-1, :14]
+                chunk_grip_l_start = current_chunk[0, 14]
+                chunk_grip_r_start = current_chunk[0, 15]
+                chunk_grip_l_end   = current_chunk[-1, 14]
+                chunk_grip_r_end   = current_chunk[-1, 15]
 
-            # gap: 本chunk[0] 与上一chunk[-1] 的跳变量（chunk边界不连续性）
-            if prev_chunk is not None:
-                gap_arm  = current_chunk[0, :14] - prev_chunk[-1, :14]
-                gap_grip = np.array([current_chunk[0, 14] - prev_chunk[-1, 14],
-                                      current_chunk[0, 15] - prev_chunk[-1, 15]])
-            else:
-                gap_arm  = np.zeros(14)
-                gap_grip = np.zeros(2)
+                # gap: 本chunk[0] 与上一chunk[-1] 的跳变量（chunk边界不连续性）
+                if prev_chunk is not None:
+                    gap_arm  = current_chunk[0, :14] - prev_chunk[-1, :14]
+                    gap_grip = np.array([current_chunk[0, 14] - prev_chunk[-1, 14],
+                                          current_chunk[0, 15] - prev_chunk[-1, 15]])
+                else:
+                    gap_arm  = np.zeros(14)
+                    gap_grip = np.zeros(2)
 
-            max_gap_deg = np.rad2deg(np.abs(gap_arm).max())
-            print(f"[Chunk {ci:3d}] t={time.time()-t_start:6.1f}s "
-                  f"exec={chunk_steps}步 "
-                  f"infer={timing['total_ms']:.0f}ms")
-            print(f"           arm_start(deg): [{', '.join(f'{np.rad2deg(v):.2f}' for v in chunk_arm_start)}]")
-            print(f"           arm_end(deg):   [{', '.join(f'{np.rad2deg(v):.2f}' for v in chunk_arm_end)}]")
-            print(f"           grip: L {chunk_grip_l_start:.1f}->{chunk_grip_l_end:.1f}  "
-                  f"R {chunk_grip_r_start:.1f}->{chunk_grip_r_end:.1f}")
-            print(f"           gap←prev:  arm_max={max_gap_deg:.2f}deg  "
-                  f"grip_L={gap_grip[0]:+.1f} grip_R={gap_grip[1]:+.1f}"
-                  + ("  ⚠️ 大跳变!" if max_gap_deg > 8.0 else ""))
+                max_gap_deg = np.rad2deg(np.abs(gap_arm).max())
+                print(f"[Chunk {ci:3d}] t={time.time()-t_start:6.1f}s "
+                      f"exec={chunk_steps}步 "
+                      f"infer={timing['total_ms']:.0f}ms")
+                print(f"           arm_start(deg): [{', '.join(f'{np.rad2deg(v):.2f}' for v in chunk_arm_start)}]")
+                print(f"           arm_end(deg):   [{', '.join(f'{np.rad2deg(v):.2f}' for v in chunk_arm_end)}]")
+                print(f"           grip: L {chunk_grip_l_start:.1f}->{chunk_grip_l_end:.1f}  "
+                      f"R {chunk_grip_r_start:.1f}->{chunk_grip_r_end:.1f}")
+                print(f"           gap←prev:  arm_max={max_gap_deg:.2f}deg  "
+                      f"grip_L={gap_grip[0]:+.1f} grip_R={gap_grip[1]:+.1f}"
+                      + ("  ⚠️ 大跳变!" if max_gap_deg > 8.0 else ""))
 
-            _csv_writer.writerow(
-                [ci, f"{time.time()-t_start:.3f}",
-                 f"{timing['total_ms']:.1f}", chunk_steps] +
-                [f"{v:.6f}" for v in chunk_arm_start] +
-                [f"{v:.6f}" for v in chunk_arm_end] +
-                [f"{chunk_grip_l_start:.6f}", f"{chunk_grip_r_start:.6f}",
-                 f"{chunk_grip_l_end:.6f}",   f"{chunk_grip_r_end:.6f}"] +
-                [f"{v:.6f}" for v in gap_arm] +
-                [f"{gap_grip[0]:.6f}", f"{gap_grip[1]:.6f}"]
-            )
-            _csv_file.flush()
+                _csv_writer.writerow(
+                    [ci, f"{time.time()-t_start:.3f}",
+                     f"{timing['total_ms']:.1f}", chunk_steps] +
+                    [f"{v:.6f}" for v in chunk_arm_start] +
+                    [f"{v:.6f}" for v in chunk_arm_end] +
+                    [f"{chunk_grip_l_start:.6f}", f"{chunk_grip_r_start:.6f}",
+                     f"{chunk_grip_l_end:.6f}",   f"{chunk_grip_r_end:.6f}"] +
+                    [f"{v:.6f}" for v in gap_arm] +
+                    [f"{gap_grip[0]:.6f}", f"{gap_grip[1]:.6f}"]
+                )
+                _csv_file.flush()
 
-            prev_chunk = current_chunk  # 保存供下一轮计算gap
+                prev_chunk = current_chunk  # 保存供下一轮计算gap
 
-    except Exception as _ex:
-        print(f"\n⚠️ 异常退出: {_ex}")
-    finally:
-        # 保持当前位置（仅发送一次手臂指令，无需循环hold，
-        # 控制器会在没有新指令时保持该位置）
-        if prev_action is not None:
-            try:
-                ros_iface.send_action(prev_action, send_gripper=False)
-            except Exception:
-                pass
-        _csv_file.close()
-        print(f"  📄 chunk日志已保存: {log_csv_path}")
+        except Exception as _ex:
+            print(f"\n⚠️ 异常退出: {_ex}")
+        finally:
+            # 保持当前位置（仅发送一次手臂指令，无需循环hold，
+            # 控制器会在没有新指令时保持该位置）
+            if prev_action is not None:
+                try:
+                    ros_iface.send_action(prev_action, send_gripper=False)
+                except Exception:
+                    pass
+            print(f"  📄 chunk日志已保存: {log_csv_path}")
 
-        total_time = time.time() - t_start
-        if total_steps > 0:
-            print(f"\n✅ 完成: {total_steps}步 ({len(infer_timings)} chunks), "
-                  f"{total_time:.1f}s, {total_steps/total_time:.1f}Hz")
+            total_time = time.time() - t_start
+            if total_steps > 0:
+                print(f"\n✅ 完成: {total_steps}步 ({len(infer_timings)} chunks), "
+                      f"{total_time:.1f}s, {total_steps/total_time:.1f}Hz")
 
-        if infer_timings:
-            print(f"\n📊 推理计时 ({len(infer_timings)}次):")
-            for key in ['image_ms', 'qpos_ms', 'preprocess_ms', 'model_ms',
-                        'postprocess_ms', 'total_ms']:
-                vals = [t[key] for t in infer_timings]
-                print(f"  {key:16s}: mean={np.mean(vals):6.1f}  std={np.std(vals):5.1f}  "
-                      f"min={np.min(vals):6.1f}  max={np.max(vals):6.1f}  "
-                      f"p95={np.percentile(vals, 95):6.1f}")
+            if infer_timings:
+                print(f"\n📊 推理计时 ({len(infer_timings)}次):")
+                for key in ['image_ms', 'qpos_ms', 'preprocess_ms', 'model_ms',
+                            'postprocess_ms', 'total_ms']:
+                    vals = [t[key] for t in infer_timings]
+                    print(f"  {key:16s}: mean={np.mean(vals):6.1f}  std={np.std(vals):5.1f}  "
+                          f"min={np.min(vals):6.1f}  max={np.max(vals):6.1f}  "
+                          f"p95={np.percentile(vals, 95):6.1f}")
 
-        rclpy.shutdown()
-        spin_thread.join(timeout=2)
+            rclpy.shutdown()
+            spin_thread.join(timeout=2)
 
 
 if __name__ == '__main__':
