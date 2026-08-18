@@ -273,7 +273,6 @@ class F1RosInterface(Node):
         返回 (qpos, images)，qpos: 16维 (14臂关节rad + 左右夹爪0~100)，
         images: dict[name -> HxWx3 RGB]。
         """
-        now = time.time()
         with self._lock:
             if self._joint_positions is None:
                 raise RuntimeError("尚未收到 /hal/joint_states")
@@ -293,6 +292,7 @@ class F1RosInterface(Node):
             stamps = {'joint_states': self._joint_stamp}
             stamps.update({f'gripper_{side}': s for side, s in self._gripper_stamp.items()})
             stamps.update({f'image_{n}': self._image_stamp[n] for n in self.camera_names})
+        now = time.time()  # 锁外读取，确保不早于上面复制的所有时间戳
 
         # 陈旧性检查（每路数据相对当前时间不能过旧）
         stale = [k for k, s in stamps.items() if now - s > SENSOR_TIMEOUT]
