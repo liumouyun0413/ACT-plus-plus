@@ -55,7 +55,8 @@ torch.backends.cudnn.enabled = False  # Thor (aarch64) cuDNN 兼容性问题
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, HistoryPolicy, ReliabilityPolicy, DurabilityPolicy
+from rclpy.qos import (QoSProfile, HistoryPolicy, ReliabilityPolicy, DurabilityPolicy,
+                        qos_profile_sensor_data)
 from sensor_msgs.msg import JointState, Image
 from control_msgs.msg import GripperCommand
 
@@ -97,9 +98,14 @@ _ARM_LIMIT_LOW_DEG = np.array([-177, -119, -177, -144, -177, -59, -89] * 2, dtyp
 _ARM_LIMIT_HIGH_DEG = np.array([177, 119, 177, 59, 177, 59, 89] * 2, dtype=np.float32)
 ARM_JOINT_LIMITS_LOW = np.deg2rad(_ARM_LIMIT_LOW_DEG)
 ARM_JOINT_LIMITS_HIGH = np.deg2rad(_ARM_LIMIT_HIGH_DEG)
-MAX_JOINT_DELTA = np.deg2rad(15.0)  # 每个 30Hz 控制周期允许的最大关节角变化(rad)
+# 关节/夹爪速度限制：按 rad/s（度/s）定义，实际每步允许的增量 = 速度 * 实际周期时长(dt)，
+# 而不是固定的“每周期角度”常量（固定常量在控制频率变化时会等效放大/缩小限速，不安全）。
+MAX_JOINT_VEL_DEG_PER_S = 90.0   # 手臂关节最大角速度限制(度/s)，用于逐步限幅，非训练/物理极限
+MAX_JOINT_VEL = np.deg2rad(MAX_JOINT_VEL_DEG_PER_S)  # rad/s
+MAX_GRIPPER_VEL_PCT_PER_S = 150.0  # 夹爪最大速度限制(百分比/s)，约 0.67s 内可开合全程
 
 SENSOR_TIMEOUT = 0.5  # 观测数据陈旧判定阈值(s)
+MAX_OBS_SKEW = 0.15  # 图像/关节/夹爪观测之间允许的最大时间戳跨度(s)
 
 
 # ── 辅助函数 ──────────────────────────────────────────────────
@@ -158,14 +164,25 @@ def clip_gripper(v):
     return float(np.clip(v, GRIPPER_RANGE[0], GRIPPER_RANGE[1]))
 
 
-def safety_clamp(action, prev=None):
+def safety_clamp(action, prev=None, dt=ACTION_DT,
+                  max_joint_vel=MAX_JOINT_VEL, max_gripper_vel=MAX_GRIPPER_VEL_PCT_PER_S):
+    """限幅并做基于实际周期时长(dt)的速度限制（关节+夹爪）。
+
+    max_joint_vel: rad/s；max_gripper_vel: %/s。
+    实际允许的单步增量 = 速度 * dt，避免固定"每周期角度"常量在控制频率变化时
+    等效放大/缩小限速。
+    """
     a = action.copy()
     a[:14] = np.clip(a[:14], ARM_JOINT_LIMITS_LOW, ARM_JOINT_LIMITS_HIGH)
     a[14] = clip_gripper(a[14])
     a[15] = clip_gripper(a[15])
     if prev is not None:
-        delta = np.clip(a[:14] - prev[:14], -MAX_JOINT_DELTA, MAX_JOINT_DELTA)
-        a[:14] = prev[:14] + delta
+        max_joint_delta = max_joint_vel * dt
+        max_gripper_delta = max_gripper_vel * dt
+        joint_delta = np.clip(a[:14] - prev[:14], -max_joint_delta, max_joint_delta)
+        a[:14] = prev[:14] + joint_delta
+        grip_delta = np.clip(a[14:16] - prev[14:16], -max_gripper_delta, max_gripper_delta)
+        a[14:16] = prev[14:16] + grip_delta
     return a
 
 
@@ -191,6 +208,9 @@ class F1RosInterface(Node):
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.VOLATILE,
         )
+        # 相机驱动通常使用传感器数据 QoS（BEST_EFFORT），若用 RELIABLE 订阅会因
+        # QoS 不兼容导致连接无法建立、程序永远等待相机数据。相机与状态话题分开。
+        qos_camera = qos_profile_sensor_data
 
         self.create_subscription(JointState, JOINT_STATES_TOPIC, self._on_joint_states, qos_state)
         self.create_subscription(JointState, GRIPPER_STATE_TOPIC['left'],
@@ -199,7 +219,7 @@ class F1RosInterface(Node):
                                   lambda m: self._on_gripper('right', m), qos_state)
         for name in camera_names:
             self.create_subscription(Image, CAMERA_TOPICS[name],
-                                      lambda m, n=name: self._on_image(n, m), qos_state)
+                                      lambda m, n=name: self._on_image(n, m), qos_camera)
 
         self.joint_ctl_pub = self.create_publisher(JointState, JOINT_CTL_TOPIC, 10)
         self.gripper_pub = {
@@ -246,36 +266,60 @@ class F1RosInterface(Node):
                 return False
         return True
 
-    def get_qpos(self):
-        """返回16维: 14臂关节(rad) + 左右夹爪(0~100)。"""
+    def get_observation(self):
+        """在同一把锁内一次性复制关节/夹爪/相机数据，并校验彼此间的时间戳跨度，
+        避免图像与 qpos 分别加锁导致二者不属于同一观测时刻。
+
+        返回 (qpos, images)，qpos: 16维 (14臂关节rad + 左右夹爪0~100)，
+        images: dict[name -> HxWx3 RGB]。
+        """
+        now = time.time()
         with self._lock:
             if self._joint_positions is None:
                 raise RuntimeError("尚未收到 /hal/joint_states")
-            if time.time() - self._joint_stamp > SENSOR_TIMEOUT:
-                raise RuntimeError("joint_states 数据过期")
-            missing = [n for n in ARM_JOINT_NAMES if n not in self._joint_positions]
-            if missing:
-                raise RuntimeError(f"joint_states 缺少关节: {missing}")
+            if any(v is None for v in self._grippers.values()):
+                raise RuntimeError("尚未收到左右夹爪状态")
+            missing_cam = [n for n in self.camera_names if n not in self._images]
+            if missing_cam:
+                raise RuntimeError(f"获取图像失败: {missing_cam}")
+            missing_joint = [n for n in ARM_JOINT_NAMES if n not in self._joint_positions]
+            if missing_joint:
+                raise RuntimeError(f"joint_states 缺少关节: {missing_joint}")
+
             arm_deg = np.array([self._joint_positions[n] for n in ARM_JOINT_NAMES], dtype=np.float32)
             grippers = dict(self._grippers)
-            gripper_stamp = dict(self._gripper_stamp)
-        for side, stamp in gripper_stamp.items():
-            if time.time() - stamp > SENSOR_TIMEOUT:
-                raise RuntimeError(f"{side} 夹爪状态过期")
+            images = {n: self._images[n].copy() for n in self.camera_names}
+
+            stamps = {'joint_states': self._joint_stamp}
+            stamps.update({f'gripper_{side}': s for side, s in self._gripper_stamp.items()})
+            stamps.update({f'image_{n}': self._image_stamp[n] for n in self.camera_names})
+
+        # 陈旧性检查（每路数据相对当前时间不能过旧）
+        stale = [k for k, s in stamps.items() if now - s > SENSOR_TIMEOUT]
+        if stale:
+            raise RuntimeError(f"以下数据过期(超过{SENSOR_TIMEOUT}s): {stale}")
+
+        # 同步性检查：三相机、关节、夹爪的采集时间跨度不能超过阈值，
+        # 防止 ROS 回调在两次读取间更新部分流，导致图像与 qpos 不属于同一时刻。
+        skew = max(stamps.values()) - min(stamps.values())
+        if skew > MAX_OBS_SKEW:
+            raise RuntimeError(
+                f"观测数据时间戳跨度过大({skew*1000:.1f}ms > {MAX_OBS_SKEW*1000:.0f}ms): {stamps}")
+
         qpos = np.zeros(16, dtype=np.float32)
         qpos[:14] = np.deg2rad(arm_deg)
         qpos[14] = grippers['left']
         qpos[15] = grippers['right']
+        return qpos, images
+
+    def get_qpos(self):
+        """返回16维: 14臂关节(rad) + 左右夹爪(0~100)。"""
+        qpos, _ = self.get_observation()
         return qpos
 
     def get_images(self):
-        with self._lock:
-            for name in self.camera_names:
-                if name not in self._images:
-                    raise RuntimeError(f"获取 {name} 图像失败")
-                if time.time() - self._image_stamp[name] > SENSOR_TIMEOUT:
-                    raise RuntimeError(f"{name} 图像数据过期")
-            return {n: self._images[n].copy() for n in self.camera_names}
+        _, images = self.get_observation()
+        return images
 
     def send_action(self, action_16, send_gripper=True):
         arm_msg = JointState()
@@ -308,12 +352,8 @@ def infer_one_chunk(policy, ros_iface, camera_names, stats, device):
     timing = {}
 
     t0 = time.time()
-    images = ros_iface.get_images()
-    timing['image_ms'] = (time.time() - t0) * 1000
-
-    t0 = time.time()
-    qpos = ros_iface.get_qpos()
-    timing['qpos_ms'] = (time.time() - t0) * 1000
+    qpos, images = ros_iface.get_observation()
+    timing['observation_ms'] = (time.time() - t0) * 1000
 
     t0 = time.time()
     imgs = np.stack([np.transpose(images[n], (2, 0, 1)) for n in camera_names])
@@ -349,18 +389,32 @@ def main():
     parser.add_argument('--gpu', type=int, default=0)
     parser.add_argument('--action_hz', type=float, default=ACTION_HZ,
                          help='训练数据 action 频率，直接按此节拍下发，默认30Hz')
+    parser.add_argument('--max_joint_vel_deg', type=float, default=MAX_JOINT_VEL_DEG_PER_S,
+                         help='手臂关节最大角速度限制(度/s)，实际单步限幅=该值*action_dt')
+    parser.add_argument('--max_gripper_vel', type=float, default=MAX_GRIPPER_VEL_PCT_PER_S,
+                         help='夹爪最大速度限制(百分比/s)，实际单步限幅=该值*action_dt')
     args = parser.parse_args()
 
     action_dt = 1.0 / args.action_hz
+    max_joint_vel = np.deg2rad(args.max_joint_vel_deg)
+    max_gripper_vel = args.max_gripper_vel
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    task_config = REAL_TASK_CONFIGS[args.task_name]
-    camera_names = task_config['camera_names']
+    task_config = REAL_TASK_CONFIGS.get(args.task_name)
 
     # 加载配置
     with open(os.path.join(args.ckpt_dir, 'config.pkl'), 'rb') as f:
         policy_config = pickle.load(f)['policy_config']
     chunk_size = policy_config['num_queries']
+
+    # 相机顺序以 checkpoint 的 policy_config 为准，而非本地 constants.py，
+    # 避免端侧 constants.py 版本落后导致相机顺序与训练模型不一致，或缺失相机
+    # 报 KeyError。仅在两者不一致时打印告警提示，便于排查。
+    camera_names = policy_config['camera_names']
+    if task_config is not None and list(task_config.get('camera_names', [])) != list(camera_names):
+        print(f"⚠️ 警告: constants.py 中 {args.task_name} 的 camera_names "
+              f"{task_config.get('camera_names')} 与 checkpoint policy_config 中的 "
+              f"{camera_names} 不一致，将以 checkpoint 为准")
 
     print(f"📋 chunk_size={chunk_size}, action_hz={args.action_hz}, "
           f"每chunk执行 {chunk_size - 1} 步（跳过chunk[0]），"
@@ -386,8 +440,7 @@ def main():
             raise RuntimeError("等待 F1 传感器数据超时（关节/夹爪/相机）")
         time.sleep(0.1)
 
-    test_img = ros_iface.get_images()
-    test_qpos = ros_iface.get_qpos()
+    test_qpos, test_img = ros_iface.get_observation()
     for n, img in test_img.items():
         print(f"   {n}: {img.shape}")
     print(f"   qpos: arm=[{test_qpos[:14].min():.3f},{test_qpos[:14].max():.3f}] "
@@ -457,7 +510,9 @@ def main():
                 for i in range(1, n):
                     step_start = time.time()
                     raw_action = current_chunk[i]
-                    action = safety_clamp(raw_action, prev_action)
+                    action = safety_clamp(raw_action, prev_action, dt=action_dt,
+                                          max_joint_vel=max_joint_vel,
+                                          max_gripper_vel=max_gripper_vel)
                     ros_iface.send_action(action, send_gripper=True)
                     prev_action = action.copy()
                     chunk_steps += 1
@@ -529,7 +584,7 @@ def main():
 
             if infer_timings:
                 print(f"\n📊 推理计时 ({len(infer_timings)}次):")
-                for key in ['image_ms', 'qpos_ms', 'preprocess_ms', 'model_ms',
+                for key in ['observation_ms', 'preprocess_ms', 'model_ms',
                             'postprocess_ms', 'total_ms']:
                     vals = [t[key] for t in infer_timings]
                     print(f"  {key:16s}: mean={np.mean(vals):6.1f}  std={np.std(vals):5.1f}  "
